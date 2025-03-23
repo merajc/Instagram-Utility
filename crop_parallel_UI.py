@@ -5,7 +5,7 @@ import time
 import io
 import base64
 from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtWidgets import QFileDialog, QTextEdit, QVBoxLayout, QPushButton, QProgressBar, QLabel, QWidget, QApplication, QHBoxLayout
+from PyQt5.QtWidgets import QFileDialog, QTextEdit, QVBoxLayout, QPushButton, QProgressBar, QLabel, QWidget, QApplication, QHBoxLayout, QSlider, QGroupBox
 from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtCore import Qt
 from PyQt5.QtMultimedia import QSound
@@ -85,7 +85,7 @@ def expand_image(image):
     new_image.paste(image, (paste_x, paste_y))
     return new_image
 
-def process_image(file_path, output_dir, progress_callback, thumbnail_dict, overlay_text):
+def process_image(file_path, output_dir, progress_callback, thumbnail_dict, overlay_text, text_height_percent, margin_percent):
     try:
         start_time = time.time()
         filename = os.path.basename(file_path)
@@ -106,7 +106,7 @@ def process_image(file_path, output_dir, progress_callback, thumbnail_dict, over
         if 0.5623 <= aspect_ratio <= 0.5627:
             # Add text overlay
             draw = ImageDraw.Draw(image)
-            font_size = int(height * 0.025)  # 2.5% of image height
+            font_size = int(height * text_height_percent)  
             try:
                 font = ImageFont.truetype("Arial.ttf", font_size)
             except:
@@ -120,9 +120,9 @@ def process_image(file_path, output_dir, progress_callback, thumbnail_dict, over
             text_camera = f"{camera} + {lens}" if lens != "N/A" else camera
             text2 = f"ISO {iso} | {aperture} | SS {ss} | {focal_length}"
             
-            # Position calculation (5% from left and bottom)
-            margin_x = int(width * 0.05)
-            margin_y = int(height * 0.05)
+            # Position calculation 
+            margin_x = int(width * margin_percent)
+            margin_y = int(height * margin_percent)
             
             # Add text with black outline for better visibility
             for offset in [(-2,-2), (-2,2), (2,-2), (2,2)]:
@@ -216,15 +216,25 @@ class ImageProcessorApp(QWidget):
                 with open(self.settings_file, 'r') as f:
                     settings = json.load(f)
                     self.overlay_text = settings.get('overlay_text', 'Japan Dec 2024')
+                    self.text_height_percent = settings.get('text_height', 0.02)
+                    self.margin_percent = settings.get('margin', 0.05)
             else:
                 self.overlay_text = 'Japan Dec 2024'
+                self.text_height_percent = 0.02
+                self.margin_percent = 0.05
         except:
             self.overlay_text = 'Japan Dec 2024'
+            self.text_height_percent = 0.02
+            self.margin_percent = 0.05
 
     def save_settings(self):
         try:
             with open(self.settings_file, 'w') as f:
-                json.dump({'overlay_text': self.overlay_text}, f)
+                json.dump({
+                    'overlay_text': self.overlay_text,
+                    'text_height': self.text_height_percent,
+                    'margin': self.margin_percent
+                }, f)
         except:
             pass
 
@@ -393,6 +403,37 @@ class ImageProcessorApp(QWidget):
             stats_layout.addWidget(label)
 
         right_sidebar.addWidget(stats_container)
+        
+        settings_group = QGroupBox("Text Settings")
+        settings_layout = QVBoxLayout()
+        
+        # Text height slider
+        text_height_layout = QHBoxLayout()
+        self.text_height_label = QLabel(f"Text Height: {self.text_height_percent * 100:.1f}%")
+        self.text_height_slider = QSlider(Qt.Horizontal)
+        self.text_height_slider.setMinimum(10)  # 1.0%
+        self.text_height_slider.setMaximum(50)  # 5.0%
+        self.text_height_slider.setValue(int(self.text_height_percent * 1000))     # 2.5% default
+        self.text_height_slider.valueChanged.connect(self.update_text_height)
+        text_height_layout.addWidget(self.text_height_label)
+        text_height_layout.addWidget(self.text_height_slider)
+        settings_layout.addLayout(text_height_layout)
+        
+        # Margin slider
+        margin_layout = QHBoxLayout()
+        self.margin_label = QLabel(f"Margin: {self.margin_percent * 100:.1f}%")
+        self.margin_slider = QSlider(Qt.Horizontal)
+        self.margin_slider.setMinimum(10)  # 1.0%
+        self.margin_slider.setMaximum(100) # 10.0%
+        self.margin_slider.setValue(int(self.margin_percent * 1000))     # 5.0% default
+        self.margin_slider.valueChanged.connect(self.update_margin)
+        margin_layout.addWidget(self.margin_label)
+        margin_layout.addWidget(self.margin_slider)
+        settings_layout.addLayout(margin_layout)
+        
+        settings_group.setLayout(settings_layout)
+        right_sidebar.addWidget(settings_group)
+
         right_sidebar.addStretch()
         main_layout.addLayout(right_sidebar)
 
@@ -400,6 +441,18 @@ class ImageProcessorApp(QWidget):
 
     def on_text_changed(self, text):
         self.overlay_text = text
+        self.save_settings()
+
+    def update_text_height(self, value):
+        height_percent = value / 10.0
+        self.text_height_label.setText(f"Text Height: {height_percent:.1f}%")
+        self.text_height_percent = height_percent / 100.0
+        self.save_settings()
+
+    def update_margin(self, value):
+        margin_percent = value / 10.0
+        self.margin_label.setText(f"Margin: {margin_percent:.1f}%")
+        self.margin_percent = margin_percent / 100.0
         self.save_settings()
 
     def select_directory(self):
@@ -553,7 +606,9 @@ class ImageProcessorApp(QWidget):
                     output_dir, 
                     self.update_progress,
                     self.thumbnails,
-                    self.overlay_text
+                    self.overlay_text,
+                    self.text_height_percent,
+                    self.margin_percent
                 ): file for file in image_files
             }
             for future in concurrent.futures.as_completed(future_to_file):
