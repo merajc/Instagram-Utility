@@ -19,29 +19,46 @@ import matplotlib.pyplot as plt
 import numpy as np
 from io import BytesIO
 from PIL import ImageDraw, ImageFont
-import os
+import json
+import os.path
 
 # Add this function to handle EXIF data extraction
 def get_exif_data(image):
     try:
         exif = image._getexif()
         if not exif:
-            return "N/A", "N/A", "N/A"
+            return "N/A", "N/A", "N/A", "N/A", "N/A"
         
+        # Get basic settings
         iso = exif.get(34855, "N/A")  # ISO
         if aperture := exif.get(37378):
             aperture = f"f/{float(aperture):.1f}"
         else:
             aperture = "N/A"
         
-        if ss := exif.get(37377):
-            ss = f"1/{int(1/float(ss))}" if float(ss) < 1 else f"{float(ss):.1f}"
+        if ss := exif.get(37377):  # ShutterSpeedValue
+            ss_value = 2 ** (-float(ss))  # Convert from APEX to decimal seconds
+            if ss_value < 1:
+                denominator = round(1/ss_value)  # Round the denominator to nearest integer
+                ss = f"1/{denominator}"
+            else:
+                ss = f"{ss_value:.1f}"
         else:
             ss = "N/A"
+        
+        # Get focal length
+        if focal := exif.get(37386):  # FocalLength
+            focal_length = f"{int(float(focal))}mm"
+        else:
+            focal_length = "N/A"
+
+        # Get camera and lens info
+        camera = exif.get(0x0110, "N/A")  # Camera model
+        lens = exif.get(0xA434, "N/A")    # Lens model
             
-        return iso, aperture, ss
+        return iso, aperture, ss, camera, lens, focal_length
     except:
-        return "N/A", "N/A", "N/A"
+        return "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
 
 def get_aspect_ratio(width, height):
     return width / height
@@ -68,7 +85,7 @@ def expand_image(image):
     new_image.paste(image, (paste_x, paste_y))
     return new_image
 
-def process_image(file_path, output_dir, progress_callback, thumbnail_dict):
+def process_image(file_path, output_dir, progress_callback, thumbnail_dict, overlay_text):
     try:
         start_time = time.time()
         filename = os.path.basename(file_path)
@@ -96,11 +113,12 @@ def process_image(file_path, output_dir, progress_callback, thumbnail_dict):
                 font = ImageFont.load_default()
             
             # Get EXIF data
-            iso, aperture, ss = get_exif_data(image)
+            iso, aperture, ss, camera, lens, focal_length = get_exif_data(image)
             
             # Prepare text
-            text1 = "Japan Dec 2024"
-            text2 = f"ISO {iso} | Aperture {aperture} | ⏱️ {ss}"
+            text1 = overlay_text
+            text_camera = f"{camera} + {lens}" if lens != "N/A" else camera
+            text2 = f"ISO {iso} | {aperture} | SS {ss} | {focal_length}"
             
             # Position calculation (5% from left and bottom)
             margin_x = int(width * 0.05)
@@ -108,11 +126,13 @@ def process_image(file_path, output_dir, progress_callback, thumbnail_dict):
             
             # Add text with black outline for better visibility
             for offset in [(-2,-2), (-2,2), (2,-2), (2,2)]:
-                draw.text((margin_x + offset[0], height - margin_y - font_size*2 + offset[1]), text1, font=font, fill='black')
+                draw.text((margin_x + offset[0], height - margin_y - font_size*3 + offset[1]), text1, font=font, fill='black')
+                draw.text((margin_x + offset[0], height - margin_y - font_size*2 + offset[1]), text_camera, font=font, fill='black')
                 draw.text((margin_x + offset[0], height - margin_y - font_size + offset[1]), text2, font=font, fill='black')
             
             # Add main white text
-            draw.text((margin_x, height - margin_y - font_size*2), text1, font=font, fill='white')
+            draw.text((margin_x, height - margin_y - font_size*3), text1, font=font, fill='white')
+            draw.text((margin_x, height - margin_y - font_size*2), text_camera, font=font, fill='white')
             draw.text((margin_x, height - margin_y - font_size), text2, font=font, fill='white')
             
             output_path = os.path.join(output_dir, filename)
@@ -185,8 +205,28 @@ class ImageProcessorApp(QWidget):
         super().__init__()
         self.thumbnails = {}
         self.active_annotations = []
+        self.settings_file = os.path.join(os.path.dirname(__file__), 'settings.json')
+        self.load_settings()
         self.initUI()
         self.applyTheme()
+
+    def load_settings(self):
+        try:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r') as f:
+                    settings = json.load(f)
+                    self.overlay_text = settings.get('overlay_text', 'Japan Dec 2024')
+            else:
+                self.overlay_text = 'Japan Dec 2024'
+        except:
+            self.overlay_text = 'Japan Dec 2024'
+
+    def save_settings(self):
+        try:
+            with open(self.settings_file, 'w') as f:
+                json.dump({'overlay_text': self.overlay_text}, f)
+        except:
+            pass
 
     def applyTheme(self):
         # Update container styles
@@ -268,6 +308,22 @@ class ImageProcessorApp(QWidget):
 
         left_layout.addLayout(top_bar)
 
+        # Add after the select button in the top bar
+        self.text_input = QtWidgets.QLineEdit(self.overlay_text, self)
+        self.text_input.setPlaceholderText("Enter overlay text")
+        self.text_input.textChanged.connect(self.on_text_changed)
+        self.text_input.setStyleSheet("""
+            QLineEdit {
+                padding: 8px;
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+                background: white;
+                min-width: 200px;
+                font-size: 14px;
+            }
+        """)
+        top_bar.addWidget(self.text_input)
+
         # Progress bar (add this)
         self.progress_bar = QProgressBar(self)
         self.progress_bar.setVisible(False)
@@ -341,6 +397,10 @@ class ImageProcessorApp(QWidget):
         main_layout.addLayout(right_sidebar)
 
         self.setLayout(main_layout)
+
+    def on_text_changed(self, text):
+        self.overlay_text = text
+        self.save_settings()
 
     def select_directory(self):
         directory = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
@@ -492,7 +552,8 @@ class ImageProcessorApp(QWidget):
                     file, 
                     output_dir, 
                     self.update_progress,
-                    self.thumbnails
+                    self.thumbnails,
+                    self.overlay_text
                 ): file for file in image_files
             }
             for future in concurrent.futures.as_completed(future_to_file):
