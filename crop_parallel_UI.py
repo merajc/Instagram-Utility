@@ -18,6 +18,30 @@ from matplotlib.transforms import Bbox
 import matplotlib.pyplot as plt
 import numpy as np
 from io import BytesIO
+from PIL import ImageDraw, ImageFont
+import os
+
+# Add this function to handle EXIF data extraction
+def get_exif_data(image):
+    try:
+        exif = image._getexif()
+        if not exif:
+            return "N/A", "N/A", "N/A"
+        
+        iso = exif.get(34855, "N/A")  # ISO
+        if aperture := exif.get(37378):
+            aperture = f"f/{float(aperture):.1f}"
+        else:
+            aperture = "N/A"
+        
+        if ss := exif.get(37377):
+            ss = f"1/{int(1/float(ss))}" if float(ss) < 1 else f"{float(ss):.1f}"
+        else:
+            ss = "N/A"
+            
+        return iso, aperture, ss
+    except:
+        return "N/A", "N/A", "N/A"
 
 def get_aspect_ratio(width, height):
     return width / height
@@ -60,8 +84,43 @@ def process_image(file_path, output_dir, progress_callback, thumbnail_dict):
         thumbnail_dict[filename] = thumb_data
         
         width, height = image.size
+        aspect_ratio = get_aspect_ratio(width, height)
         
-        if should_skip_image(width, height):
+        if 0.5623 <= aspect_ratio <= 0.5627:
+            # Add text overlay
+            draw = ImageDraw.Draw(image)
+            font_size = int(height * 0.025)  # 2.5% of image height
+            try:
+                font = ImageFont.truetype("Arial.ttf", font_size)
+            except:
+                font = ImageFont.load_default()
+            
+            # Get EXIF data
+            iso, aperture, ss = get_exif_data(image)
+            
+            # Prepare text
+            text1 = "Japan Dec 2024"
+            text2 = f"ISO {iso} | Aperture {aperture} | ⏱️ {ss}"
+            
+            # Position calculation (5% from left and bottom)
+            margin_x = int(width * 0.05)
+            margin_y = int(height * 0.05)
+            
+            # Add text with black outline for better visibility
+            for offset in [(-2,-2), (-2,2), (2,-2), (2,2)]:
+                draw.text((margin_x + offset[0], height - margin_y - font_size*2 + offset[1]), text1, font=font, fill='black')
+                draw.text((margin_x + offset[0], height - margin_y - font_size + offset[1]), text2, font=font, fill='black')
+            
+            # Add main white text
+            draw.text((margin_x, height - margin_y - font_size*2), text1, font=font, fill='white')
+            draw.text((margin_x, height - margin_y - font_size), text2, font=font, fill='white')
+            
+            output_path = os.path.join(output_dir, filename)
+            image.save(output_path, format=image.format, quality=100)
+            progress_callback(f"Added overlay: {filename}")
+            return "processed", (time.time() - start_time) * 1000, filename, file_size
+        
+        if aspect_ratio == 4/3:
             output_path = os.path.join(output_dir, filename)
             image.save(output_path, format=image.format, quality=100)
             progress_callback(f"Copied: {filename}")
