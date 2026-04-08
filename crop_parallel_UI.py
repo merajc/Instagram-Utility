@@ -85,7 +85,7 @@ def expand_image(image):
     new_image.paste(image, (paste_x, paste_y))
     return new_image
 
-def process_image(file_path, output_dir, progress_callback, thumbnail_dict, overlay_text, text_height_percent, margin_percent):
+def process_image(file_path, output_dir, overlay_text, text_height_percent, margin_percent):
     try:
         start_time = time.time()
         filename = os.path.basename(file_path)
@@ -98,7 +98,6 @@ def process_image(file_path, output_dir, progress_callback, thumbnail_dict, over
         buffer = io.BytesIO()
         thumb.save(buffer, format='PNG')
         thumb_data = base64.b64encode(buffer.getvalue()).decode()
-        thumbnail_dict[filename] = thumb_data
         
         width, height = image.size
         aspect_ratio = get_aspect_ratio(width, height)
@@ -137,23 +136,19 @@ def process_image(file_path, output_dir, progress_callback, thumbnail_dict, over
             
             output_path = os.path.join(output_dir, filename)
             image.save(output_path, format=image.format, quality=100)
-            progress_callback(f"Added overlay: {filename}")
-            return "processed", (time.time() - start_time) * 1000, filename, file_size
+            return "processed", (time.time() - start_time) * 1000, filename, file_size, thumb_data, f"Added overlay: {filename}"
         
         if aspect_ratio == 4/3:
             output_path = os.path.join(output_dir, filename)
             image.save(output_path, format=image.format, quality=100)
-            progress_callback(f"Copied: {filename}")
-            return "skipped", (time.time() - start_time) * 1000, filename, file_size
+            return "skipped", (time.time() - start_time) * 1000, filename, file_size, thumb_data, f"Copied: {filename}"
         
         new_image = expand_image(image)
         output_path = os.path.join(output_dir, filename)
         new_image.save(output_path, format=image.format, quality=100)
-        progress_callback(f"Processed: {filename}")
-        return "processed", (time.time() - start_time) * 1000, filename, file_size
+        return "processed", (time.time() - start_time) * 1000, filename, file_size, thumb_data, f"Processed: {filename}"
     except Exception as e:
-        progress_callback(f"Error processing {file_path}: {e}")
-        return "error", 0, filename, 0
+        return "error", 0, os.path.basename(file_path), 0, None, f"Error processing {file_path}: {e}"
 
 class MaterialButton(QPushButton):
     def __init__(self, text, parent=None, primary=True, icon=None):
@@ -604,8 +599,6 @@ class ImageProcessorApp(QWidget):
                     process_image, 
                     file, 
                     output_dir, 
-                    self.update_progress,
-                    self.thumbnails,
                     self.overlay_text,
                     self.text_height_percent,
                     self.margin_percent
@@ -613,7 +606,10 @@ class ImageProcessorApp(QWidget):
             }
             for future in concurrent.futures.as_completed(future_to_file):
                 try:
-                    result, proc_time, filename, file_size = future.result()
+                    result, proc_time, filename, file_size, thumb_data, msg = future.result()
+                    if thumb_data:
+                        self.thumbnails[filename] = thumb_data
+                    self.update_progress(msg)
                     processing_data.append((proc_time, filename, file_size))
                     if result == "processed":
                         processed_images += 1
