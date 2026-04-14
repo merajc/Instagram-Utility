@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+venv/
+__pycache__/
+*.swp
+*.o
+*.swiftdeps
+*.swiftmodule
+*.swiftsourceinfo
+.lock
+build.db
+*.dSYM/
+index/

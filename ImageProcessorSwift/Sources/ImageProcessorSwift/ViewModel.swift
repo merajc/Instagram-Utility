@@ -113,4 +113,15 @@ final class ViewModel {
     func processedCount(for status: ProcessingStatus) -> Int {
         results.filter { $0.status == status }.count
     }
+
+    // MARK: Performance Metrics
+
+    var avgProcessingTime: Double {
+        guard !results.isEmpty else { return 0 }
+        return results.map(\.processingTime).reduce(0, +) / Double(results.count)
+    }
+
+    var fastestTime: Double { results.map(\.processingTime).min() ?? 0 }
+    var slowestTime: Double { results.map(\.processingTime).max() ?? 0 }
+    var totalProcessingTime: Double { results.map(\.processingTime).reduce(0, +) / 1000 }
 }

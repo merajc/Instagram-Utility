@@ -5,15 +5,16 @@ import SwiftUI
 struct ContentView: View {
     @State private var viewModel = ViewModel()
 
+    private let card = Color(NSColor.controlBackgroundColor)
+
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             leftColumn
-            rightSidebar
+            rightColumn
         }
         .padding(20)
-        .frame(minWidth: 960, minHeight: 640)
+        .frame(minWidth: 980, minHeight: 560)
         .background(Color(NSColor.windowBackgroundColor))
-        // Folder picker — uses NSOpenPanel semantics on macOS
         .fileImporter(
             isPresented: $viewModel.showFolderPicker,
             allowedContentTypes: [.folder],
@@ -22,8 +23,6 @@ struct ContentView: View {
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                // Security-scoped resource: required for sandboxed apps,
-                // harmless (returns false) when running via `swift run`.
                 let accessing = url.startAccessingSecurityScopedResource()
                 viewModel.selectedDirectory = url
                 Task {
@@ -39,135 +38,209 @@ struct ContentView: View {
     // MARK: - Left column
 
     private var leftColumn: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
+            headerCard
 
-            // ── Top bar ────────────────────────────────────────────────────
-            HStack(spacing: 12) {
-                Image(systemName: "photo.stack.fill")
-                    .font(.title2)
-                    .foregroundStyle(.blue)
+            if viewModel.isProcessing || viewModel.completedCount > 0 {
+                progressRow
+                metricStrip
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
-                Text(viewModel.selectedDirectory?.lastPathComponent ?? "Select a folder to start…")
-                    .font(.headline)
-                    .foregroundStyle(
-                        viewModel.selectedDirectory == nil ? .secondary : .primary
-                    )
+            if !viewModel.logMessages.isEmpty {
+                logCard
+                    .transition(.opacity)
+            }
+
+            if !viewModel.results.isEmpty {
+                // frame(maxHeight: .infinity) → absorbs ALL remaining vertical space
+                // after fixed-height siblings are laid out. This is what keeps the
+                // UI squeezed into whatever window height the user has.
+                ChartsView(viewModel: viewModel)
+                    .frame(maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: viewModel.results.isEmpty)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.isProcessing)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // ── Header card ──────────────────────────────────────────────────────────
+
+    private var headerCard: some View {
+        HStack(spacing: 14) {
+            // Folder icon
+            Image(systemName: viewModel.selectedDirectory == nil ? "folder" : "folder.fill")
+                .font(.title)
+                .foregroundStyle(viewModel.selectedDirectory == nil ? Color.secondary : Color.blue)
+
+            // Title — folder name or placeholder
+            VStack(alignment: .leading, spacing: 2) {
+                Text(viewModel.selectedDirectory?.lastPathComponent ?? "Select a folder")
+                    .font(.title2.bold())
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                Spacer()
+                if let dir = viewModel.selectedDirectory {
+                    Text(dir.path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+            }
 
-                // Overlay-text input (mirrors Python's QLineEdit)
-                TextField("Overlay text", text: $viewModel.settings.overlayText)
-                    .textFieldStyle(.roundedBorder)
+            Spacer()
+
+            // Overlay text input
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Overlay Text")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("e.g. Japan Dec 2024", text: $viewModel.settings.overlayText)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color(NSColor.windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(.separator, lineWidth: 1))
                     .frame(width: 200)
-                    .onChange(of: viewModel.settings.overlayText) {
-                        viewModel.saveSettings()
-                    }
-
-                Button(viewModel.isProcessing ? "Processing…" : "Select Folder") {
-                    viewModel.showFolderPicker = true
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(viewModel.isProcessing)
-            }
-            .padding(14)
-            .background(Color(NSColor.controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
-
-            // ── Progress bar ───────────────────────────────────────────────
-            if viewModel.isProcessing || viewModel.completedCount > 0 {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(viewModel.isProcessing ? "Processing…" : "Complete")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text("\(viewModel.completedCount) / \(viewModel.totalCount)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    ProgressView(value: viewModel.progress)
-                        .progressViewStyle(.linear)
-                        .animation(.easeInOut, value: viewModel.progress)
-                }
-                .padding(.horizontal, 4)
+                    .onChange(of: viewModel.settings.overlayText) { viewModel.saveSettings() }
             }
 
-            // ── Log ────────────────────────────────────────────────────────
-            if !viewModel.logMessages.isEmpty {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) {
-                        LazyVStack(alignment: .leading, spacing: 1) {
-                            ForEach(
-                                Array(viewModel.logMessages.enumerated()),
-                                id: \.0
-                            ) { _, msg in
-                                Text(msg)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(
-                                        msg.hasPrefix("Error") ? .red
-                                        : msg.hasPrefix("Done")  ? .green
-                                        : .secondary
-                                    )
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            Color.clear.frame(height: 1).id("logBottom")
-                        }
-                        .padding(8)
-                    }
-                    .frame(height: 120)
-                    .background(Color(NSColor.controlBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator, lineWidth: 1))
-                    .onChange(of: viewModel.logMessages.count) {
-                        withAnimation { proxy.scrollTo("logBottom") }
-                    }
-                }
+            // Select folder button
+            Button {
+                viewModel.showFolderPicker = true
+            } label: {
+                Label(viewModel.isProcessing ? "Processing…" : "Select Folder",
+                      systemImage: viewModel.isProcessing ? "hourglass" : "folder.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(viewModel.isProcessing ? Color.secondary.opacity(0.2) : Color.blue)
+                    .foregroundStyle(viewModel.isProcessing ? Color.secondary : Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
             }
-
-            // ── Charts ─────────────────────────────────────────────────────
-            if !viewModel.results.isEmpty {
-                ChartsView(viewModel: viewModel)
-                    .shadow(color: .black.opacity(0.05), radius: 4, y: 2)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-
-            Spacer()
+            .buttonStyle(.plain)
+            .disabled(viewModel.isProcessing)
         }
-        .animation(.easeInOut(duration: 0.25), value: viewModel.results.isEmpty)
-        .frame(maxWidth: .infinity)
-    }
-
-    // MARK: - Right sidebar
-
-    private var rightSidebar: some View {
-        VStack(spacing: 14) {
-            statsCard
-            settingsCard
-            Spacer()
-        }
-        .frame(width: 230)
-    }
-
-    private var statsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Statistics", systemImage: "chart.bar.fill")
-                .font(.headline)
-
-            Divider()
-
-            StatRow(label: "Processed",   value: viewModel.processedCount(for: .processed), color: .green)
-            StatRow(label: "Copied (4:3)", value: viewModel.processedCount(for: .skipped),  color: .orange)
-            StatRow(label: "Errors",       value: viewModel.processedCount(for: .error),    color: .red)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(NSColor.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(16)
+        .background(card)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
     }
+
+    // ── Progress row ─────────────────────────────────────────────────────────
+
+    private var progressRow: some View {
+        VStack(spacing: 5) {
+            HStack {
+                Text(viewModel.isProcessing ? "Processing…" : "Complete")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(viewModel.completedCount) / \(viewModel.totalCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: viewModel.progress)
+                .progressViewStyle(.linear)
+                .tint(viewModel.isProcessing ? .blue : .green)
+                .animation(.easeInOut, value: viewModel.progress)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    // ── Metric strip ─────────────────────────────────────────────────────────
+
+    private var metricStrip: some View {
+        HStack(spacing: 10) {
+            MetricCard(
+                value: "\(viewModel.processedCount(for: .processed))",
+                label: "Processed",
+                accent: Color(hex: "#22C55E")
+            )
+            MetricCard(
+                value: "\(viewModel.processedCount(for: .skipped))",
+                label: "Copied",
+                accent: Color(hex: "#EAB308")
+            )
+            MetricCard(
+                value: "\(viewModel.processedCount(for: .error))",
+                label: "Errors",
+                accent: Color(hex: "#EF4444")
+            )
+        }
+    }
+
+    // ── Terminal log ─────────────────────────────────────────────────────────
+
+    private var logCard: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(
+                        Array(viewModel.logMessages.enumerated()),
+                        id: \.0
+                    ) { _, msg in
+                        HStack(alignment: .top, spacing: 8) {
+                            Circle()
+                                .fill(logDotColor(msg))
+                                .frame(width: 6, height: 6)
+                                .padding(.top, 3.5)
+
+                            Text(msg)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(logTextColor(msg))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 1)
+                    }
+                    Color.clear.frame(height: 4).id("logBottom")
+                }
+                .padding(.vertical, 10)
+            }
+            .frame(minHeight: 72, maxHeight: 100)
+            .background(card)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator, lineWidth: 1))
+            .onChange(of: viewModel.logMessages.count) {
+                withAnimation { proxy.scrollTo("logBottom") }
+            }
+        }
+    }
+
+    private func logDotColor(_ msg: String) -> Color {
+        if msg.hasPrefix("Done")   { return Color(hex: "#22C55E") }
+        if msg.hasPrefix("Error")  { return Color(hex: "#EF4444") }
+        if msg.hasPrefix("Delete") { return Color(hex: "#EAB308") }
+        return .blue
+    }
+
+    private func logTextColor(_ msg: String) -> Color {
+        if msg.hasPrefix("Done")  { return Color(hex: "#22C55E") }
+        if msg.hasPrefix("Error") { return Color(hex: "#EF4444") }
+        return .primary
+    }
+
+    // MARK: - Right column
+
+    private var rightColumn: some View {
+        VStack(spacing: 12) {
+            settingsCard
+            performanceCard
+            Spacer()
+        }
+        .frame(width: 234)
+    }
+
+    // ── Settings card ─────────────────────────────────────────────────────────
 
     private var settingsCard: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -176,50 +249,135 @@ struct ContentView: View {
 
             Divider()
 
-            // Text-height slider (1 % – 5 %)
             SliderRow(
                 label: "Text Height",
                 value: $viewModel.settings.textHeightPercent,
-                range: 0.01 ... 0.05,
+                range: 0.01...0.05,
                 format: { String(format: "%.1f%%", $0 * 100) },
                 onChange: { viewModel.saveSettings() }
             )
 
-            // Margin slider (1 % – 10 %)
             SliderRow(
                 label: "Margin",
                 value: $viewModel.settings.marginPercent,
-                range: 0.01 ... 0.10,
+                range: 0.01...0.10,
                 format: { String(format: "%.1f%%", $0 * 100) },
                 onChange: { viewModel.saveSettings() }
             )
         }
-        .padding(14)
+        .padding(16)
+        .background(card)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+    }
+
+    // ── Performance card ──────────────────────────────────────────────────────
+
+    private var performanceCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Performance", systemImage: "speedometer")
+                .font(.headline)
+
+            Divider()
+
+            if viewModel.results.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 6) {
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                        Text("Run a batch to see metrics")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 12)
+            } else {
+                PerfRow(icon: "timer",    label: "Average",  value: formatMs(viewModel.avgProcessingTime))
+                PerfRow(icon: "bolt",     label: "Fastest",  value: formatMs(viewModel.fastestTime))
+                PerfRow(icon: "tortoise", label: "Slowest",  value: formatMs(viewModel.slowestTime))
+
+                Divider()
+
+                PerfRow(icon: "clock",    label: "Total CPU", value: String(format: "%.1fs", viewModel.totalProcessingTime))
+                PerfRow(icon: "photo.on.rectangle", label: "Images", value: "\(viewModel.totalCount)")
+            }
+        }
+        .padding(16)
+        .background(card)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.results.isEmpty)
+    }
+
+    private func formatMs(_ ms: Double) -> String {
+        ms >= 1000 ? String(format: "%.2fs", ms / 1000) : String(format: "%.0fms", ms)
+    }
+}
+
+// MARK: - MetricCard
+
+struct MetricCard: View {
+    let value: String
+    let label: String
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Colored left accent bar
+            accent
+                .frame(width: 4)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(value)
+                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                Text(label)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, minHeight: 68)
         .background(Color(NSColor.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
     }
 }
 
-// MARK: - Reusable sub-views
+// MARK: - PerfRow
 
-struct StatRow: View {
+struct PerfRow: View {
+    let icon: String
     let label: String
-    let value: Int
-    let color: Color
+    let value: String
 
     var body: some View {
         HStack {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(label).foregroundStyle(.secondary)
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             Spacer()
-            Text("\(value)")
-                .fontWeight(.semibold)
-                .monospacedDigit()
+            Text(value)
+                .font(.subheadline.monospacedDigit())
+                .fontWeight(.medium)
         }
-        .font(.subheadline)
     }
 }
+
+// MARK: - SliderRow
 
 struct SliderRow: View {
     let label: String
