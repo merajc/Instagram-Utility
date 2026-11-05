@@ -1,5 +1,7 @@
 # Instagram Utility
 
+[![build](https://github.com/merajc/Instagram-Utility/actions/workflows/build.yml/badge.svg)](https://github.com/merajc/Instagram-Utility/actions/workflows/build.yml)
+
 A small macOS app that turns a folder of mixed-aspect-ratio photos into a set that fits an
 Instagram gallery grid.
 
