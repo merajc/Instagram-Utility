@@ -63,22 +63,23 @@ def load_font(size):
     except TypeError:
         return ImageFont.load_default()
 
-# Add this function to handle EXIF data extraction
+# Read the tags we need out of the image's EXIF block. `getexif()` rather than the
+# private `_getexif()`: it also works on the plain Image that exif_transpose returns.
 def get_exif_data(image):
     try:
-        exif = image._getexif()
+        exif = image.getexif()
         if not exif:
             # Must match the 6-value return below (iso, aperture, ss, camera, lens, focal_length)
             return "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
         
         # Get basic settings
         iso = exif.get(34855, "N/A")  # ISO
-        if aperture := exif.get(37378):
-            aperture = f"f/{float(aperture):.1f}"
+        if av := exif.get(37378):  # ApertureValue, stored in APEX — f-number = 2^(APEX/2)
+            aperture = f"f/{2 ** (float(av) / 2):.1f}"
         else:
             aperture = "N/A"
         
-        if ss := exif.get(37377):  # ShutterSpeedValue
+        if ss := exif.get(37377):  # ShutterSpeedValue, APEX → seconds = 2^(-APEX)
             ss_value = 2 ** (-float(ss))  # Convert from APEX to decimal seconds
             if ss_value < 1:
                 denominator = round(1/ss_value)  # Round the denominator to nearest integer

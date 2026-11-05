@@ -30,12 +30,14 @@ final class ProcessingTests: XCTestCase {
 
     enum FixtureError: Error { case couldNotCreateContext, couldNotWrite }
 
-    /// Writes a solid-colour JPEG, optionally carrying an Exif orientation tag (1–8).
+    /// Writes a solid-colour JPEG, optionally carrying an Exif orientation tag (1–8)
+    /// and/or extra ImageIO properties such as camera metadata.
     @discardableResult
     private func writeJPEG(
         width: Int,
         height: Int,
         orientation: UInt32? = nil,
+        extraProperties: [CFString: Any] = [:],
         named name: String
     ) throws -> URL {
         guard
@@ -53,7 +55,8 @@ final class ProcessingTests: XCTestCase {
             url as CFURL, UTType.jpeg.identifier as CFString, 1, nil
         ) else { throw FixtureError.couldNotWrite }
 
-        var props: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.95]
+        var props: [CFString: Any] = extraProperties
+        props[kCGImageDestinationLossyCompressionQuality] = 0.95
         if let orientation {
             props[kCGImagePropertyOrientation] = orientation
         }
@@ -135,6 +138,41 @@ final class ProcessingTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: outputDir.appendingPathComponent("no-exif.jpg").path
         ))
+    }
+
+    // MARK: - EXIF extraction
+
+    /// ApertureValue and ShutterSpeedValue are APEX-encoded, not f-numbers and fractions.
+    func testExifIsConvertedFromApex() throws {
+        let exif: [CFString: Any] = [
+            kCGImagePropertyExifISOSpeedRatings: [400],
+            kCGImagePropertyExifApertureValue: 1.6959938131099002,   // f/1.8
+            kCGImagePropertyExifShutterSpeedValue: 7.965784284662087, // 1/250
+            kCGImagePropertyExifFocalLength: 35.0,
+            kCGImagePropertyExifLensModel: "Sample 35mm f/1.8"
+        ]
+        let tiff: [CFString: Any] = [kCGImagePropertyTIFFModel: "Sample Camera X1"]
+
+        let url = try writeJPEG(
+            width: 900, height: 1600,
+            extraProperties: [
+                kCGImagePropertyExifDictionary: exif,
+                kCGImagePropertyTIFFDictionary: tiff
+            ],
+            named: "exif.jpg"
+        )
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return XCTFail("could not read back the fixture")
+        }
+        let info = extractExif(from: source)
+
+        XCTAssertEqual(info.iso, "400")
+        XCTAssertEqual(info.aperture, "f/1.8")
+        XCTAssertEqual(info.shutterSpeed, "1/250")
+        XCTAssertEqual(info.focalLength, "35mm")
+        XCTAssertEqual(info.camera, "Sample Camera X1")
+        XCTAssertEqual(info.lens, "Sample 35mm f/1.8")
     }
 
     // MARK: - Failure reporting

@@ -50,7 +50,7 @@ Native SwiftUI + Swift Charts rewrite targeting **macOS 14+** and Apple Silicon 
 | JPEG decode | Pillow | **ImageIO** (hardware decoder) |
 | Thumbnail | Full image decode + resize | Embedded EXIF thumbnail via ImageIO |
 | 4:3 copy | Re-encodes at quality=100 | `FileManager.copyItem` — zero re-encode |
-| EXIF reading | `_getexif()` hack | `CGImageSourceCopyPropertiesAtIndex` |
+| EXIF reading | `getexif()` | `CGImageSourceCopyPropertiesAtIndex` |
 | Text overlay | Pillow draw | Core Graphics + Core Text |
 | Settings | `settings.json` next to script | `~/Library/Application Support/` |
 | UI | PyQt5 + matplotlib | SwiftUI + Swift Charts (native, dark mode) |
