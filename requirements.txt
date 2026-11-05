@@ -1,0 +1,7 @@
+# Python 3.8+ (the code uses the walrus operator)
+Pillow>=10.0
+PyQt5>=5.15
+matplotlib>=3.7
+numpy>=1.24
+psutil>=5.9
+mplcursors>=0.5

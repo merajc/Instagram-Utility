@@ -212,9 +212,12 @@ func processImage(
 
     // Thumbnail — ImageIO reads a JPEG thumbnail from the embedded JFIF/Exif
     // thumbnail segment instead of decoding the full image: much faster than PIL's copy().
+    // `...FromImageIfAbsent` (not `...Always`) is what makes that true — `Always`
+    // forces a full decode. `WithTransform` applies the EXIF orientation tag.
     let thumbOptions: [CFString: Any] = [
         kCGImageSourceThumbnailMaxPixelSize: 100,
-        kCGImageSourceCreateThumbnailFromImageAlways: true
+        kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+        kCGImageSourceCreateThumbnailWithTransform: true
     ]
     let thumbCG  = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary)
     let thumbnail = thumbCG.map {

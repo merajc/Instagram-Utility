@@ -22,8 +22,11 @@ A batch image processor for Instagram gallery formatting (4:3 aspect ratio), wit
 PyQt5 GUI + Pillow image processing. Uses `ThreadPoolExecutor` for parallelism (limited by the Python GIL on CPU-bound work).
 
 **Requirements**
+
+Python 3.8+ (the EXIF parsing uses the walrus operator).
+
 ```bash
-pip install Pillow PyQt5 psutil matplotlib mplcursors numpy
+pip install -r requirements.txt
 ```
 
 **Run**
@@ -78,6 +81,7 @@ swift build -c release # optimised
 ```
 Instagram-Utility/
 ├── crop_parallel_UI.py              # Python/PyQt5 version
+├── requirements.txt                 # Python dependencies
 ├── settings.json                    # Python settings (persisted)
 ├── runCrop.Command                  # macOS double-click launcher (Python)
 ├── run_swift.sh                     # Dev launcher (Swift)
@@ -92,3 +96,21 @@ Instagram-Utility/
         ├── ContentView.swift        # Main SwiftUI layout
         └── ChartView.swift          # Swift Charts (pie + bar + hover tooltip)
 ```
+
+---
+
+## Known limitations
+
+- **JPEG only.** HEIC (the iPhone default) and RAW are not read.
+- **EXIF orientation is not applied.** Photos that are stored sideways with a rotation tag may get
+  bars on the wrong axis. Fix is tracked in `REVIEW.md`.
+- **macOS only.** The Swift version targets macOS 14+; the Python version may work elsewhere but is
+  untested outside macOS.
+- **The output folder is overwritten.** Every run clears the existing `cropped/` directory.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+

@@ -27,7 +27,8 @@ def get_exif_data(image):
     try:
         exif = image._getexif()
         if not exif:
-            return "N/A", "N/A", "N/A", "N/A", "N/A"
+            # Must match the 6-value return below (iso, aperture, ss, camera, lens, focal_length)
+            return "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
         
         # Get basic settings
         iso = exif.get(34855, "N/A")  # ISO

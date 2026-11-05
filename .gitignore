@@ -1,5 +1,8 @@
 .DS_Store
 .build/
+.swiftpm/
+ImageProcessor.app/
+cropped/
 venv/
 __pycache__/
 *.swp
