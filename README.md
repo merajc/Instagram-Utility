@@ -1,91 +1,141 @@
 # Instagram Utility
 
-A batch image processor for Instagram gallery formatting (4:3 aspect ratio), with EXIF text overlay for portrait shots. Available in two implementations — a Python/PyQt5 original and a native Swift/SwiftUI rewrite optimised for Apple Silicon.
+A small macOS app that turns a folder of mixed-aspect-ratio photos into a set that fits an
+Instagram gallery grid.
+
+Instagram crops every grid preview to 4:3. Upload a mix of portrait and landscape shots and the
+tiles come out inconsistent. This tool fixes that before you upload: it pads each photo onto a
+white 4:3 canvas, leaves photos that are already 4:3 untouched, and gives 9:16 portrait shots a
+text overlay of their EXIF camera settings.
+
+There are two implementations: a native Swift/SwiftUI app (the one to use) and the original
+Python/PyQt5 script it grew out of.
 
 ---
 
-## What it does
+## What it does to each photo
 
-- Scans a folder for JPEG images
-- **9:16 portrait shots** → adds a text + EXIF data overlay (ISO, aperture, shutter speed, focal length, camera & lens)
-- **Already 4:3** → copied as-is (Swift version: zero re-encode)
-- **Any other ratio** → expands the canvas to 4:3 with white bars
-- Outputs everything to a `cropped/` subfolder
-- Shows a live progress log, pie chart summary, and per-image processing-time bar chart
+| Photo | What happens |
+|---|---|
+| **9:16 portrait** (0.5625 ± 0.0002) | Text overlay: your caption, camera + lens, and ISO / aperture / shutter speed / focal length |
+| **Already 4:3** (within 0.001) | Swift copies the file byte-for-byte; Python re-encodes at quality 100 |
+| **Any other ratio** | Centred on white, canvas expanded to 4:3 |
+| **Has an EXIF rotation tag** | Rotated to the orientation it was shot in *before* any of the above, so portrait photos measure as portrait |
+
+Output goes to `cropped/` inside the folder you picked. Anything already in `cropped/` is removed
+at the start of a run (the Python version asks first; the Swift version doesn't).
+
+Only files directly inside the chosen folder are processed — subfolders are not scanned.
 
 ---
 
-## Versions
+## Requirements
 
-### 🐍 Python (`crop_parallel_UI.py`)
+**Swift version** — macOS 14 (Sonoma) or later, plus Xcode Command Line Tools:
 
-> **Status:** reference implementation, no longer under active development. New work goes into the
-> Swift version below.
+```bash
+xcode-select --install
+```
 
-PyQt5 GUI + Pillow image processing. Uses `ThreadPoolExecutor` for parallelism (limited by the Python GIL on CPU-bound work).
-
-**Requirements**
-
-Python 3.8+ (the EXIF parsing uses the walrus operator).
+**Python version** — Python 3.8 or later. The EXIF code uses the walrus operator.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**Run**
-```bash
-python crop_parallel_UI.py
-# or double-click runCrop.Command
-```
-
 ---
 
-### 🦅 Swift (`ImageProcessorSwift/`)
+## Run it
 
-Native SwiftUI + Swift Charts rewrite targeting **macOS 14+** and Apple Silicon (M-series). Purpose-built to exploit M4 hardware:
+### Swift (recommended)
 
-| Concern | Python | Swift |
-|---|---|---|
-| Parallelism | `ThreadPoolExecutor` + GIL | `TaskGroup` — true multi-core |
-| JPEG decode | Pillow | **ImageIO** (hardware decoder) |
-| Thumbnail | Full image decode + resize | Embedded EXIF thumbnail via ImageIO |
-| 4:3 copy | Re-encodes at quality=100 | `FileManager.copyItem` — zero re-encode |
-| EXIF reading | `getexif()` | `CGImageSourceCopyPropertiesAtIndex` |
-| Text overlay | Pillow draw | Core Graphics + Core Text |
-| Settings | `settings.json` next to script | `~/Library/Application Support/` |
-| UI | PyQt5 + matplotlib | SwiftUI + Swift Charts (native, dark mode) |
-
-**Requirements**
-- macOS 14 (Sonoma) or later
-- Xcode Command Line Tools (`xcode-select --install`)
-
-**Run (dev)**
 ```bash
 ./run_swift.sh
 ```
 
-**Build a double-clickable `.app`**
+To build a double-clickable app in the repo root:
+
 ```bash
-./build_swift_app.sh
-# Opens ImageProcessor.app when done
+./build_swift_app.sh    # builds release, creates ImageProcessor.app, opens it
 ```
 
-**Build manually**
+Or build manually:
+
 ```bash
 cd ImageProcessorSwift
-swift build            # debug
-swift build -c release # optimised
+swift build -c release
 ```
 
-**Run tests**
+### Python (legacy)
+
+```bash
+python3 crop_parallel_UI.py
+# or double-click runCrop.Command
+```
+
+Still functional, no longer developed. Bug fixes that matter land in the Swift version.
+
+---
+
+## Using it
+
+1. **Select Folder** — the folder of JPEGs you want to prepare.
+2. **Overlay Text** — the caption printed on 9:16 portraits. Saved between sessions.
+3. **Text Height / Margin** — both as a percentage of the image dimensions; these only affect the
+   overlay.
+4. Watch the log, the progress bar, and when it finishes: a summary donut, a per-image timing
+   chart, and CPU/memory figures in the Python version.
+
+Both versions show the same results, with one difference worth knowing: a file that is already
+4:3 is *copied* by the Swift version (no generation loss) and *re-encoded* by the Python version.
+
+---
+
+## What the overlay looks like
+
+Three lines, bottom-left, white text with a 4px black outline:
+
+```
+France, January 2026
+Sony A7 IV + FE 35mm F1.8
+ISO 400 | f/1.8 | SS 1/250 | 35mm
+```
+
+Missing EXIF renders as `N/A` rather than hiding the line, so the overlay stays aligned across a
+batch. Text size and margin are percentages of image height, so the overlay scales with resolution.
+
+---
+
+## Verifying it works
+
 ```bash
 cd ImageProcessorSwift
 swift test
 ```
 
+Six tests, covering: EXIF orientation deciding the aspect ratio, the landscape and 9:16 branches,
+byte-for-byte copying of exact 4:3, overlay on a photo with no EXIF at all, APEX-to-f-number
+conversion, and unreadable input being reported as an error rather than silently skipped.
+
+CI runs the same suite, a release build, and a Python syntax check on every push to `main` and on
+every pull request.
+
 ---
 
-## Project structure
+## The two implementations
+
+|  | Swift (current) | Python (legacy) |
+|---|---|---|
+| UI | SwiftUI + Swift Charts | PyQt5 + matplotlib |
+| Parallelism | Task group, bounded to the core count | `ThreadPoolExecutor`, limited by the GIL |
+| EXIF | ImageIO | Pillow `getexif()` |
+| Already-4:3 files | Copied, no re-encode | Re-encoded at quality 100 |
+| Settings | `~/Library/Application Support/ImageProcessorSwift/settings.json` | `settings.json` next to the script |
+| Tests | 6 | none |
+
+---
+
+## Project layout
 
 ```
 Instagram-Utility/
@@ -105,7 +155,7 @@ Instagram-Utility/
     │   ├── ContentView.swift        # Main SwiftUI layout
     │   └── ChartView.swift          # Swift Charts (pie + bar + hover tooltip)
     └── Tests/ImageProcessorSwiftTests/
-        └── ProcessingTests.swift    # Orientation, aspect-ratio routing, failure reporting
+        └── ProcessingTests.swift    # Orientation, ratio routing, EXIF, failure reporting
 ```
 
 ---
@@ -113,16 +163,14 @@ Instagram-Utility/
 ## Known limitations
 
 - **JPEG only.** HEIC (the iPhone default) and RAW are not read.
-- **macOS only.** The Swift version targets macOS 14+; the Python version may work elsewhere but is
-  untested outside macOS.
-- **The Swift app overwrites the output folder.** Every run clears the existing `cropped/`
-  directory without asking. The Python version asks first.
-- **Not signed or notarised.** If you build the `.app` yourself that's fine; downloading a
-  pre-built one would hit Gatekeeper.
+- **Top level only.** Subfolders are not scanned.
+- **The Swift app overwrites `cropped/` without asking.** The Python version confirms first.
+- **macOS only.** The Swift app targets macOS 14+; the Python version is untested elsewhere.
+- **Not signed or notarised.** Building the `.app` yourself is fine; a pre-built binary would hit
+  Gatekeeper.
 
 ---
 
-## License
+## Licence
 
 MIT — see [LICENSE](LICENSE).
-
