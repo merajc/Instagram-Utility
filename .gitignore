@@ -3,6 +3,7 @@
 .swiftpm/
 ImageProcessor.app/
 cropped/
+.artifacts/
 venv/
 __pycache__/
 *.swp

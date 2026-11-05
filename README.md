@@ -19,6 +19,9 @@ A batch image processor for Instagram gallery formatting (4:3 aspect ratio), wit
 
 ### 🐍 Python (`crop_parallel_UI.py`)
 
+> **Status:** reference implementation, no longer under active development. New work goes into the
+> Swift version below.
+
 PyQt5 GUI + Pillow image processing. Uses `ThreadPoolExecutor` for parallelism (limited by the Python GIL on CPU-bound work).
 
 **Requirements**
@@ -74,6 +77,12 @@ swift build            # debug
 swift build -c release # optimised
 ```
 
+**Run tests**
+```bash
+cd ImageProcessorSwift
+swift test
+```
+
 ---
 
 ## Project structure
@@ -88,13 +97,15 @@ Instagram-Utility/
 ├── build_swift_app.sh               # Release .app builder (Swift)
 └── ImageProcessorSwift/
     ├── Package.swift
-    └── Sources/ImageProcessorSwift/
-        ├── ImageProcessorApp.swift  # @main SwiftUI entry point
-        ├── Models.swift             # Shared types & AppSettings
-        ├── ImageProcessor.swift     # Core processing + ImageProcessingService actor
-        ├── ViewModel.swift          # @MainActor @Observable state
-        ├── ContentView.swift        # Main SwiftUI layout
-        └── ChartView.swift          # Swift Charts (pie + bar + hover tooltip)
+    ├── Sources/ImageProcessorSwift/
+    │   ├── ImageProcessorApp.swift  # @main SwiftUI entry point
+    │   ├── Models.swift             # Shared types & AppSettings
+    │   ├── ImageProcessor.swift     # Core processing + ImageProcessingService actor
+    │   ├── ViewModel.swift          # @MainActor @Observable state
+    │   ├── ContentView.swift        # Main SwiftUI layout
+    │   └── ChartView.swift          # Swift Charts (pie + bar + hover tooltip)
+    └── Tests/ImageProcessorSwiftTests/
+        └── ProcessingTests.swift    # Orientation, aspect-ratio routing, failure reporting
 ```
 
 ---
@@ -102,11 +113,12 @@ Instagram-Utility/
 ## Known limitations
 
 - **JPEG only.** HEIC (the iPhone default) and RAW are not read.
-- **EXIF orientation is not applied.** Photos that are stored sideways with a rotation tag may get
-  bars on the wrong axis. Fix is tracked in `REVIEW.md`.
 - **macOS only.** The Swift version targets macOS 14+; the Python version may work elsewhere but is
   untested outside macOS.
-- **The output folder is overwritten.** Every run clears the existing `cropped/` directory.
+- **The Swift app overwrites the output folder.** Every run clears the existing `cropped/`
+  directory without asking. The Python version asks first.
+- **Not signed or notarised.** If you build the `.app` yourself that's fine; downloading a
+  pre-built one would hit Gatekeeper.
 
 ---
 

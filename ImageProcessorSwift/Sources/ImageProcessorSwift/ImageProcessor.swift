@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CoreImage
 import ImageIO
 import CoreText
 import AppKit
@@ -60,6 +61,25 @@ func extractExif(from source: CGImageSource) -> ExifInfo {
     }
 
     return info
+}
+
+// MARK: - Exif Orientation
+// `CGImageSourceCreateImageAtIndex` hands back the *stored* pixels and ignores the
+// orientation tag, so a portrait phone photo (stored landscape + "rotate 90°") would be
+// measured as landscape, get bars on the wrong axis and come out sideways. Rotate it back
+// to its intended display orientation before anything measures or draws on it.
+
+private let sharedCIContext = CIContext()
+
+func applyExifOrientation(_ image: CGImage, from source: CGImageSource) -> CGImage {
+    guard
+        let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+        let raw = props[kCGImagePropertyOrientation as String] as? UInt32,
+        raw != 1
+    else { return image }
+
+    let oriented = CIImage(cgImage: image).oriented(forExifOrientation: Int32(raw))
+    return sharedCIContext.createCGImage(oriented, from: oriented.extent) ?? image
 }
 
 // MARK: - Canvas Expansion
@@ -163,17 +183,17 @@ func addTextOverlay(
 // MARK: - JPEG Save
 // Quality 1.0 = maximum quality, equivalent to Python's quality=100.
 
-func saveJPEG(_ image: CGImage, to url: URL) {
+func saveJPEG(_ image: CGImage, to url: URL) -> Bool {
     guard let dest = CGImageDestinationCreateWithURL(
         url as CFURL,
         UTType.jpeg.identifier as CFString,
         1, nil
-    ) else { return }
+    ) else { return false }
     CGImageDestinationAddImage(
         dest, image,
         [kCGImageDestinationLossyCompressionQuality: 1.0] as CFDictionary
     )
-    CGImageDestinationFinalize(dest)
+    return CGImageDestinationFinalize(dest)
 }
 
 // MARK: - Single Image Processor
@@ -197,18 +217,25 @@ func processImage(
         fileSize = 0
     }
 
+    func failure(_ message: String) -> ProcessingResult {
+        ProcessingResult(
+            status: .error, filename: filename,
+            processingTime: Date().timeIntervalSince(t0) * 1000,
+            fileSize: fileSize, message: message, thumbnail: nil
+        )
+    }
+
     // Load image via ImageIO (fast hardware-backed JPEG decoder on M4)
     guard
         let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-        let image  = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil)
     else {
-        return ProcessingResult(
-            status: .error, filename: filename,
-            processingTime: 0, fileSize: fileSize,
-            message: "Error: could not open \(filename)",
-            thumbnail: nil
-        )
+        return failure("Error: could not open \(filename)")
     }
+
+    // Rotate to the orientation the photographer actually saw, before anything
+    // measures the image. A portrait phone photo is stored landscape + a rotation tag.
+    let image = applyExifOrientation(decoded, from: source)
 
     // Thumbnail — ImageIO reads a JPEG thumbnail from the embedded JFIF/Exif
     // thumbnail segment instead of decoding the full image: much faster than PIL's copy().
@@ -238,7 +265,7 @@ func processImage(
             : exif.camera
         let exifStr = "ISO \(exif.iso) | \(exif.aperture) | SS \(exif.shutterSpeed) | \(exif.focalLength)"
 
-        let output = addTextOverlay(
+        guard let output = addTextOverlay(
             to: image,
             line1: overlayText,
             line2: cameraStr,
@@ -246,9 +273,13 @@ func processImage(
             fontSize: CGFloat(h) * textHeightPercent,
             marginX:  CGFloat(w) * marginPercent,
             marginY:  CGFloat(h) * marginPercent
-        ) ?? image
+        ) else {
+            return failure("Error: could not render overlay on \(filename)")
+        }
 
-        saveJPEG(output, to: outURL)
+        guard saveJPEG(output, to: outURL) else {
+            return failure("Error: could not write \(filename)")
+        }
         return ProcessingResult(
             status: .processed, filename: filename,
             processingTime: elapsed(), fileSize: fileSize,
@@ -258,7 +289,11 @@ func processImage(
 
     // ── Exact 4:3 → file copy (no re-encode, better than Python which re-encodes) ──
     if abs(aspect - 4.0 / 3.0) < 0.001 {
-        try? FileManager.default.copyItem(at: url, to: outURL)
+        do {
+            try FileManager.default.copyItem(at: url, to: outURL)
+        } catch {
+            return failure("Error: could not copy \(filename): \(error.localizedDescription)")
+        }
         return ProcessingResult(
             status: .skipped, filename: filename,
             processingTime: elapsed(), fileSize: fileSize,
@@ -267,13 +302,46 @@ func processImage(
     }
 
     // ── Other ratio → expand canvas to 4:3 ─────────────────────────────────
-    let expanded = expandToFourThirds(image) ?? image
-    saveJPEG(expanded, to: outURL)
+    guard let expanded = expandToFourThirds(image) else {
+        return failure("Error: could not expand canvas for \(filename)")
+    }
+    guard saveJPEG(expanded, to: outURL) else {
+        return failure("Error: could not write \(filename)")
+    }
     return ProcessingResult(
         status: .processed, filename: filename,
         processingTime: elapsed(), fileSize: fileSize,
         message: "Processed: \(filename)", thumbnail: thumbnail
     )
+}
+
+// MARK: - Bounded concurrency
+// A task group will happily start one child task per file. For CPU-bound work that just
+// parks the cooperative pool on long synchronous blocks and makes the actual concurrency
+// whatever the runtime feels like. One semaphore, sized to the cores we mean to use,
+// turns that into a number we chose.
+
+actor AsyncSemaphore {
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(_ count: Int) { available = max(1, count) }
+
+    func wait() async {
+        if available > 0 {
+            available -= 1
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func signal() {
+        if waiters.isEmpty {
+            available += 1
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
 }
 
 // MARK: - Processing Service
@@ -318,17 +386,22 @@ actor ImageProcessingService {
         // withTaskGroup schedules child tasks on the cooperative thread pool.
         // On M4, this naturally saturates P-cores and E-cores simultaneously.
         // No GIL, no thread creation overhead — pure M4 parallelism.
+        let limit = AsyncSemaphore(ProcessInfo.processInfo.activeProcessorCount)
+
         return await withTaskGroup(of: ProcessingResult.self) { group in
             for file in files {
                 let s = settings   // capture value copy
                 group.addTask {
-                    processImage(
+                    await limit.wait()
+                    let result = processImage(
                         at: file,
                         outputDir: outputDir,
                         overlayText: s.overlayText,
                         textHeightPercent: s.textHeightPercent,
                         marginPercent: s.marginPercent
                     )
+                    await limit.signal()
+                    return result
                 }
             }
 

@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "ImageProcessorSwift",
             path: "Sources/ImageProcessorSwift"
+        ),
+        .testTarget(
+            name: "ImageProcessorSwiftTests",
+            dependencies: ["ImageProcessorSwift"],
+            path: "Tests/ImageProcessorSwiftTests"
         )
     ]
 )

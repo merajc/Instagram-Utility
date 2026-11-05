@@ -26,14 +26,14 @@ cat > "$APP/Contents/Info.plist" << 'PLIST'
     <key>CFBundleName</key>             <string>Image Processor</string>
     <key>CFBundleDisplayName</key>      <string>Image Processor</string>
     <key>CFBundleExecutable</key>       <string>ImageProcessorSwift</string>
-    <key>CFBundleIdentifier</key>       <string>com.user.imageprocessorswift</string>
+    <key>CFBundleIdentifier</key>       <string>io.github.merajc.ImageProcessor</string>
     <key>CFBundleVersion</key>          <string>1.0</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundlePackageType</key>      <string>APPL</string>
     <key>NSPrincipalClass</key>         <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>  <true/>
     <key>LSMinimumSystemVersion</key>   <string>14.0</string>
-    <key>NSHumanReadableCopyright</key> <string></string>
+    <key>NSHumanReadableCopyright</key> <string>MIT licensed — github.com/merajc/Instagram-Utility</string>
 </dict>
 </plist>
 PLIST

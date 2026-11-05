@@ -11,7 +11,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - name: Test (also builds)
+        run: swift test
+        working-directory: ImageProcessorSwift
+      - name: Release build
         run: swift build -c release
         working-directory: ImageProcessorSwift
 

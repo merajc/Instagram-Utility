@@ -1,26 +1,67 @@
-import os
-import concurrent.futures
-import psutil
-import time
-import io
 import base64
-from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtWidgets import QFileDialog, QTextEdit, QVBoxLayout, QPushButton, QProgressBar, QLabel, QWidget, QApplication, QHBoxLayout, QSlider, QGroupBox
-from PyQt5.QtGui import QFont, QPalette, QColor
-from PyQt5.QtCore import Qt
-from PyQt5.QtMultimedia import QSound
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-import mplcursors  # Changed from mplcursor to mplcursors
-from PIL import Image  # Ensure Pillow is installed: pip install Pillow
-from matplotlib.offsetbox import AnnotationBbox, OffsetImage
-from matplotlib.transforms import Bbox
-import matplotlib.pyplot as plt
-import numpy as np
-from io import BytesIO
-from PIL import ImageDraw, ImageFont
+import concurrent.futures
+import io
 import json
-import os.path
+import os
+import sys
+import time
+
+import mplcursors
+import numpy as np
+import psutil
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PyQt5 import QtWidgets
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QSlider,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+# Portrait images are accepted as 9:16 within this tolerance of the exact ratio.
+NINE_SIXTEEN = (0.5623, 0.5627)
+FOUR_THIRDS = 4 / 3
+ASPECT_TOLERANCE = 0.001
+
+# Pillow resolves bare filenames against the platform font path. Arial is present on
+# macOS but usually absent on Linux, so fall back to a font that ships with the OS.
+FONT_CANDIDATES = (
+    "Arial.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+)
+_font_warning_shown = False
+
+
+def load_font(size):
+    """Return the first font that actually loads at *size*.
+
+    Falling back silently is what made the old code look like the height slider was
+    broken: `load_default()` on Pillow < 10.1 is a fixed-size bitmap font that ignores
+    the requested size entirely.
+    """
+    for candidate in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=size)  # Pillow >= 10.1
+    except TypeError:
+        return ImageFont.load_default()
 
 # Add this function to handle EXIF data extraction
 def get_exif_data(image):
@@ -58,20 +99,16 @@ def get_exif_data(image):
         lens = exif.get(0xA434, "N/A")    # Lens model
             
         return iso, aperture, ss, camera, lens, focal_length
-    except:
+    except Exception:
         return "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
 
 def get_aspect_ratio(width, height):
     return width / height
 
-def should_skip_image(width, height):
-    aspect_ratio = get_aspect_ratio(width, height)
-    return aspect_ratio == 4/3 or (0.5623 <= aspect_ratio <= 0.5627)
-
 def expand_image(image):
     width, height = image.size
     aspect_ratio = get_aspect_ratio(width, height)
-    target_aspect_ratio = 4/3
+    target_aspect_ratio = FOUR_THIRDS
     
     if (aspect_ratio > target_aspect_ratio):  # Wider than 4:3, add top and bottom bars
         new_height = int(width / target_aspect_ratio)
@@ -90,7 +127,12 @@ def process_image(file_path, output_dir, overlay_text, text_height_percent, marg
     try:
         start_time = time.time()
         filename = os.path.basename(file_path)
-        image = Image.open(file_path)
+        with Image.open(file_path) as opened:
+            image_format = opened.format or "JPEG"
+            # Rotate to the orientation the photographer actually saw before measuring.
+            # Phone cameras store portrait shots landscape plus an orientation tag.
+            image = ImageOps.exif_transpose(opened)
+            image.load()
         file_size = os.path.getsize(file_path) / (1024 * 1024)  # Size in MB
         
         # Create thumbnail
@@ -103,14 +145,11 @@ def process_image(file_path, output_dir, overlay_text, text_height_percent, marg
         width, height = image.size
         aspect_ratio = get_aspect_ratio(width, height)
         
-        if 0.5623 <= aspect_ratio <= 0.5627:
+        if NINE_SIXTEEN[0] <= aspect_ratio <= NINE_SIXTEEN[1]:
             # Add text overlay
             draw = ImageDraw.Draw(image)
-            font_size = int(height * text_height_percent)  
-            try:
-                font = ImageFont.truetype("Arial.ttf", font_size)
-            except:
-                font = ImageFont.load_default()
+            font_size = int(height * text_height_percent)
+            font = load_font(font_size)
             
             # Get EXIF data
             iso, aperture, ss, camera, lens, focal_length = get_exif_data(image)
@@ -136,28 +175,26 @@ def process_image(file_path, output_dir, overlay_text, text_height_percent, marg
             draw.text((margin_x, height - margin_y - font_size), text2, font=font, fill='white')
             
             output_path = os.path.join(output_dir, filename)
-            image.save(output_path, format=image.format, quality=100)
+            image.save(output_path, format=image_format, quality=100)
             return "processed", (time.time() - start_time) * 1000, filename, file_size, thumb_data, f"Added overlay: {filename}"
         
-        if aspect_ratio == 4/3:
+        if abs(aspect_ratio - FOUR_THIRDS) < ASPECT_TOLERANCE:
             output_path = os.path.join(output_dir, filename)
-            image.save(output_path, format=image.format, quality=100)
+            image.save(output_path, format=image_format, quality=100)
             return "skipped", (time.time() - start_time) * 1000, filename, file_size, thumb_data, f"Copied: {filename}"
         
         new_image = expand_image(image)
         output_path = os.path.join(output_dir, filename)
-        new_image.save(output_path, format=image.format, quality=100)
+        new_image.save(output_path, format=image_format, quality=100)
         return "processed", (time.time() - start_time) * 1000, filename, file_size, thumb_data, f"Processed: {filename}"
     except Exception as e:
         return "error", 0, os.path.basename(file_path), 0, None, f"Error processing {file_path}: {e}"
 
 class MaterialButton(QPushButton):
-    def __init__(self, text, parent=None, primary=True, icon=None):
+    def __init__(self, text, parent=None, primary=True):
         super().__init__(text, parent)
         self.setMinimumHeight(36)
         self.setCursor(Qt.PointingHandCursor)
-        if icon:
-            self.setIcon(icon)
         
         if primary:
             self.setStyleSheet("""
@@ -218,7 +255,7 @@ class ImageProcessorApp(QWidget):
                 self.overlay_text = 'Japan Dec 2024'
                 self.text_height_percent = 0.02
                 self.margin_percent = 0.05
-        except:
+        except Exception:
             self.overlay_text = 'Japan Dec 2024'
             self.text_height_percent = 0.02
             self.margin_percent = 0.05
@@ -231,8 +268,8 @@ class ImageProcessorApp(QWidget):
                     'text_height': self.text_height_percent,
                     'margin': self.margin_percent
                 }, f)
-        except:
-            pass
+        except OSError as exc:
+            print(f"Could not save settings to {self.settings_file}: {exc}", file=sys.stderr)
 
     def applyTheme(self):
         # Update container styles
@@ -453,15 +490,35 @@ class ImageProcessorApp(QWidget):
 
     def select_directory(self):
         directory = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
-        if directory:
-            self.directory_label.setText(os.path.basename(directory))
-            self.log_text.setVisible(True)  # Show log when processing starts
-            self.process_images(directory)
-            self.directory_label.setText("Processing complete")
+        if not directory:
+            return
+        if not self.confirm_clear_output(directory):
+            return
+        self.directory_label.setText(os.path.basename(directory))
+        self.log_text.setVisible(True)  # Show log when processing starts
+        self.process_images(directory)
+        self.directory_label.setText("Processing complete")
 
-    def toggleLog(self):
-        self.log_visible = not self.log_visible
-        self.log_container.setVisible(self.log_visible)
+    def confirm_clear_output(self, directory):
+        """Ask before wiping existing files out of <directory>/cropped/."""
+        output_dir = os.path.join(directory, "cropped")
+        if not os.path.isdir(output_dir):
+            return True
+        existing = [
+            name for name in os.listdir(output_dir)
+            if os.path.isfile(os.path.join(output_dir, name))
+        ]
+        if not existing:
+            return True
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Clear output folder?",
+            f"{len(existing)} file(s) already exist in:\n{output_dir}\n\n"
+            "They will be deleted before processing. Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        return answer == QtWidgets.QMessageBox.Yes
 
     def update_progress(self, message):
         self.log_text.append(message)
@@ -569,15 +626,19 @@ class ImageProcessorApp(QWidget):
         output_dir = os.path.join(directory, "cropped")
         os.makedirs(output_dir, exist_ok=True)
 
-        # if there are files inside the output_dir then delete them
-        for f in os.listdir(output_dir):
-            os.remove(os.path.join(output_dir, f))
-            self.update_progress(f"Deleted {f} from {output_dir}")
+        # Clear previous output. Only files — a subdirectory here is someone else's data,
+        # and os.remove() on it would raise IsADirectoryError before any work started.
+        for entry in os.listdir(output_dir):
+            path = os.path.join(output_dir, entry)
+            if os.path.isfile(path):
+                os.remove(path)
+                self.update_progress(f"Deleted {entry} from {output_dir}")
         
         image_files = [os.path.join(directory, f) for f in os.listdir(directory) if f.lower().endswith((".jpg", ".jpeg"))]
         
         if not image_files:
             self.update_progress("No JPEG images found in the directory.")
+            self.progress_bar.setVisible(False)
             return
         
         total_images = len(image_files)
@@ -631,10 +692,8 @@ class ImageProcessorApp(QWidget):
         self.memory_label.setText(f'Memory Usage: {memory_usage_start}% -> {memory_usage_end}%')
         self.time_label.setText(f'Time Taken: {end_time - start_time:.2f} seconds')
         self.plot_results(processed_images, skipped_images, error_images, processing_data)
-        #QSound.play("complete.wav")
 
 if __name__ == "__main__":
-    import sys
     app = QApplication(sys.argv)
     ex = ImageProcessorApp()
     ex.show()
